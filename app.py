@@ -15,7 +15,13 @@ uploaded_zip = st.file_uploader("Upload your `creditcard.csv.zip` file", type=["
 if uploaded_zip:
     # Extract the CSV file
     with zipfile.ZipFile(uploaded_zip, 'r') as zip_ref:
-        csv_name = [f for f in zip_ref.namelist() if f.endswith('.csv')][0]
+        csv_files = [f for f in zip_ref.namelist() if f.endswith('.csv')]
+        if not csv_files:
+            st.error("No CSV found inside the ZIP file.")
+            st.stop()
+
+        csv_name = csv_files[0]
+
         with zip_ref.open(csv_name) as csv_file:
             df = pd.read_csv(csv_file)
 
@@ -32,7 +38,7 @@ if uploaded_zip:
     buffer = io.StringIO()
     df.info(buf=buffer)
     info_str = buffer.getvalue()
-    st.text(info_str)
+    st.code(info_str)
 
     st.write("**Statistical Summary:**")
     st.dataframe(df.describe())
@@ -64,8 +70,8 @@ if uploaded_zip:
 
     # Correlation Heatmap
     st.subheader("Correlation Heatmap")
-    fig, ax = plt.subplots(figsize=(18, 15))
-    corr = df.corr()
+    fig, ax = plt.subplots(figsize=(14, 12))
+    corr = df.corr(numeric_only=True)
     sns.heatmap(corr, cmap='coolwarm', annot=False, ax=ax)
     ax.set_title('Correlation Heatmap')
     st.pyplot(fig)
@@ -76,8 +82,8 @@ if uploaded_zip:
 
     st.subheader("Transaction Amount: Fraud vs Non-Fraud")
     fig, ax = plt.subplots(figsize=(8, 5))
-    sns.histplot(non_fraud['Amount'], color='blue', label='Non-Fraud', bins=50, alpha=0.6)
-    sns.histplot(fraud['Amount'], color='red', label='Fraud', bins=50, alpha=0.6)
+    sns.histplot(non_fraud['Amount'], label='Non-Fraud', bins=50, alpha=0.6)
+    sns.histplot(fraud['Amount'], label='Fraud', bins=50, alpha=0.6, color='red')
     ax.legend()
     ax.set_title("Transaction Amount: Fraud vs Non-Fraud")
     st.pyplot(fig)
@@ -86,11 +92,11 @@ if uploaded_zip:
     st.subheader("Class Imbalance")
     fraud_count = df['Class'].value_counts()
     fig, ax = plt.subplots()
-    ax.pie(fraud_count, labels=['Non-Fraud','Fraud'], autopct='%1.2f%%', colors=['skyblue','red'])
+    ax.pie(fraud_count, labels=['Non-Fraud', 'Fraud'], autopct='%1.2f%%')
     ax.set_title('Class Imbalance')
     st.pyplot(fig)
 
-    # Boxplot for Amount
+    # Boxplot
     st.subheader("Boxplot: Amount by Class")
     fig, ax = plt.subplots(figsize=(10, 5))
     sns.boxplot(x='Class', y='Amount', data=df, ax=ax)
@@ -100,50 +106,61 @@ if uploaded_zip:
     Q1 = df['Amount'].quantile(0.25)
     Q3 = df['Amount'].quantile(0.75)
     IQR = Q3 - Q1
-    lower_bound = Q1 - 1.5 * IQR
-    upper_bound = Q3 + 1.5 * IQR
-    outliers_amount = df[(df['Amount'] < lower_bound) | (df['Amount'] > upper_bound)]
+    if IQR == 0:
+        outliers_amount = pd.DataFrame()
+    else:
+        lower_bound = Q1 - 1.5 * IQR
+        upper_bound = Q3 + 1.5 * IQR
+        outliers_amount = df[(df['Amount'] < lower_bound) | (df['Amount'] > upper_bound)]
 
     st.write("**Number of outliers in Amount:**", outliers_amount.shape[0])
-    st.write("**Lower bound:**", lower_bound, " | **Upper bound:**", upper_bound)
 
     # Outlier count per feature
     st.subheader("Outlier Counts per Feature (IQR Method)")
-    numeric_features = df.drop(columns=['Class']).columns
+    numeric_features = df.drop(columns=['Class']).select_dtypes(include=np.number).columns
     outlier_counts = {}
 
     for feature in numeric_features:
         Q1 = df[feature].quantile(0.25)
         Q3 = df[feature].quantile(0.75)
         IQR = Q3 - Q1
+
+        if IQR == 0:
+            outlier_counts[feature] = 0
+            continue
+
         lower_bound = Q1 - 1.5 * IQR
         upper_bound = Q3 + 1.5 * IQR
         outliers = df[(df[feature] < lower_bound) | (df[feature] > upper_bound)]
         outlier_counts[feature] = len(outliers)
 
     outlier_df = pd.DataFrame(list(outlier_counts.items()), columns=['Feature', 'Num_Outliers'])
-    outlier_df = outlier_df.sort_values(by='Num_Outliers', ascending=False)
-    st.dataframe(outlier_df)
+    st.dataframe(outlier_df.sort_values(by='Num_Outliers', ascending=False))
 
-    # Outlier comparison between fraud and non-fraud
+    # Outlier comparison between fraud & non fraud
     st.subheader("Outlier Comparison: Fraud vs Non-Fraud")
     outlier_summary = {}
+
     for feature in numeric_features:
+        outlier_summary[feature] = {"Fraud": 0, "Non-Fraud": 0}
+
         # Fraud
-        Q1, Q3 = fraud[feature].quantile([0.25, 0.75])
-        IQR = Q3 - Q1
-        lower, upper = Q1 - 1.5 * IQR, Q3 + 1.5 * IQR
-        out_fraud = fraud[(fraud[feature] < lower) | (fraud[feature] > upper)]
+        Q1_f, Q3_f = fraud[feature].quantile([0.25, 0.75])
+        IQR_f = Q3_f - Q1_f
 
         # Non-Fraud
-        Q1, Q3 = non_fraud[feature].quantile([0.25, 0.75])
-        IQR = Q3 - Q1
-        lower, upper = Q1 - 1.5 * IQR, Q3 + 1.5 * IQR
-        out_non_fraud = non_fraud[(non_fraud[feature] < lower) | (non_fraud[feature] > upper)]
+        Q1_nf, Q3_nf = non_fraud[feature].quantile([0.25, 0.75])
+        IQR_nf = Q3_nf - Q1_nf
 
-        outlier_summary[feature] = {'Fraud': len(out_fraud), 'Non-Fraud': len(out_non_fraud)}
+        if IQR_f != 0:
+            lower_f, upper_f = Q1_f - 1.5 * IQR_f, Q3_f + 1.5 * IQR_f
+            outlier_summary[feature]["Fraud"] = len(fraud[(fraud[feature] < lower_f) | (fraud[feature] > upper_f)])
 
-    outlier_comparison = pd.DataFrame(outlier_summary).T
-    st.dataframe(outlier_comparison.sort_values(by='Fraud', ascending=False))
+        if IQR_nf != 0:
+            lower_nf, upper_nf = Q1_nf - 1.5 * IQR_nf, Q3_nf + 1.5 * IQR_nf
+            outlier_summary[feature]["Non-Fraud"] = len(non_fraud[(non_fraud[feature] < lower_nf) | (non_fraud[feature] > upper_nf)])
+
+    st.dataframe(pd.DataFrame(outlier_summary).T.sort_values(by="Fraud", ascending=False))
+
 else:
     st.info("Please upload the ZIP file containing `creditcard.csv` to begin.")
